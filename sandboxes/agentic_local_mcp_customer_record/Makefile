@@ -5,8 +5,12 @@ NETWORK := customer_record_lab
 EXPLOIT_DIR := ../../exploitation/agentic_bulk_delete
 PODMAN ?= podman
 HOST_PORT ?= 8011
+MODEL ?= gpt-oss:20b
+MODEL_BASE_URL ?= http://host.containers.internal:11434/v1
+MODEL_READY_URL ?= http://localhost:11434/api/version
+RESULTS_SUBDIR ?=
 
-.PHONY: help install sync lock build up down stop test test-unit attack replay all format mypy ollama-pull ollama-ready
+.PHONY: help install sync lock build up down stop test test-unit test-container attack replay all format mypy ollama-pull ollama-ready model-ready
 
 help:
 	@echo "Agentic Local MCP Customer Record - Available Commands:"
@@ -14,6 +18,7 @@ help:
 	@echo "  make up         - Start the vulnerable baseline locally"
 	@echo "  make test       - Verify agent and MCP health"
 	@echo "  make test-unit  - Run unit and regression tests"
+	@echo "  make test-container - Run deterministic real-container checks"
 	@echo "  make attack     - Run the payload/defense matrix"
 	@echo "  make replay     - Run the offline deterministic replay"
 	@echo "  make stop       - Remove lab containers and network"
@@ -31,21 +36,24 @@ lock:
 ollama-pull:
 	ollama pull gpt-oss:20b
 
-ollama-ready:
-	@curl -sf http://localhost:11434/api/version >/dev/null || (echo "Ollama is not ready on :11434"; exit 1)
+model-ready:
+	@curl -sf "$(MODEL_READY_URL)" >/dev/null || (echo "Model backend is not ready at $(MODEL_READY_URL)"; exit 1)
+
+ollama-ready: model-ready
 
 build:
 	$(PODMAN) build -f Containerfile -t $(IMAGE) .
 	-$(PODMAN) network create --driver bridge $(NETWORK) 2>/dev/null || true
 
-up: ollama-ready
+up: model-ready
 	-$(PODMAN) rm -f $(AGENT_CONTAINER) $(MCP_CONTAINER) 2>/dev/null || true
 	-$(PODMAN) network create --driver bridge $(NETWORK) 2>/dev/null || true
 	$(PODMAN) run -d --name $(MCP_CONTAINER) --network $(NETWORK) \
 		-e TOOL_OUTPUT=escaped \
 		--entrypoint uv $(IMAGE) run python mcp/customer_records.py
-	$(PODMAN) run -d --name $(AGENT_CONTAINER) --network $(NETWORK) -p $(HOST_PORT):8000 \
+	$(PODMAN) run -d --name $(AGENT_CONTAINER) --network $(NETWORK) -p 127.0.0.1:$(HOST_PORT):8000 \
 		-e MCP_SERVER_URL=http://$(MCP_CONTAINER):8000/sse \
+		-e OLLAMA_BASE_URL=$(MODEL_BASE_URL) \
 		$(IMAGE)
 
 test:
@@ -61,8 +69,12 @@ test-unit: sync
 	PYTHONPATH=.:../../exploitation/agentic_bulk_delete uv run pytest \
 		tests/ ../../exploitation/agentic_bulk_delete/tests/
 
+test-container: build
+	PODMAN="$(PODMAN)" $(MAKE) -C $(EXPLOIT_DIR) test-container
+
 attack: build up test
-	$(MAKE) -C $(EXPLOIT_DIR) attack
+	TARGET_MODEL="$(MODEL)" RESULTS_SUBDIR="$(RESULTS_SUBDIR)" \
+		$(MAKE) -C $(EXPLOIT_DIR) attack
 
 replay:
 	$(MAKE) -C $(EXPLOIT_DIR) replay
@@ -72,7 +84,8 @@ stop down:
 	-$(PODMAN) network rm $(NETWORK) 2>/dev/null || true
 
 all: test-unit build up test
-	$(MAKE) -C $(EXPLOIT_DIR) attack
+	TARGET_MODEL="$(MODEL)" RESULTS_SUBDIR="$(RESULTS_SUBDIR)" \
+		$(MAKE) -C $(EXPLOIT_DIR) attack
 	$(MAKE) stop
 
 format:

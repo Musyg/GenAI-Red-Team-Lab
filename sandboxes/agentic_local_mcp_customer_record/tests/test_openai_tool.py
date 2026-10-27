@@ -5,6 +5,8 @@ from types import SimpleNamespace
 from unittest import IsolatedAsyncioTestCase
 from unittest.mock import AsyncMock, patch
 
+from fastapi import HTTPException
+
 from app.mocks import openai_tool
 from app.mocks.openai import ChatCompletionRequest
 
@@ -208,7 +210,7 @@ class ToolMessageOrderingTests(IsolatedAsyncioTestCase):
         )
         self.assertEqual(len(calls[1][1]["tool_calls"]), 2)
 
-    async def test_iteration_budget_returns_last_response(self):
+    async def test_iteration_budget_is_explicitly_incomplete(self):
         completions = ExhaustingCompletions()
         session = SimpleNamespace(
             initialize=AsyncMock(),
@@ -244,7 +246,9 @@ class ToolMessageOrderingTests(IsolatedAsyncioTestCase):
                 AsyncMock(return_value=[{"type": "function"}]),
             ),
         ):
-            response = await openai_tool.chat_completions(request, token="test")
+            with self.assertRaises(HTTPException) as caught:
+                await openai_tool.chat_completions(request, token="test")
 
-        self.assertIs(response, completions.responses[-1])
+        self.assertEqual(caught.exception.status_code, 409)
+        self.assertEqual(caught.exception.detail["status"], "iteration_limit")
         self.assertEqual(len(completions.calls), 2)

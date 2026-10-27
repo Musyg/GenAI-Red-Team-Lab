@@ -41,6 +41,7 @@ def _create_completion(**kwargs: Any) -> Any:
 async def chat_completions(
     request: ChatCompletionRequest, token: str = Depends(verify_api_key)
 ) -> Any:
+    iterations = 0
     try:
         # Connect to the remote MCP server
         async with sse_client(url=MCP_SERVER_URL) as (read, write):
@@ -49,7 +50,6 @@ async def chat_completions(
 
                 # Fetch available tools from MCP
                 openai_tools = await fetch_mcp_tools(session)
-                iterations = 0
 
                 while iterations < MAX_ITERATIONS:
                     iterations += 1
@@ -116,10 +116,16 @@ async def chat_completions(
                                 }
                             )
 
-                # Preserve a useful response when the iteration budget is
-                # exhausted instead of returning an empty body.
-                return response
+        # Raise only after the SSE/MCP context managers have closed cleanly.
+        # Raising inside them can be wrapped in an ExceptionGroup and converted
+        # into a misleading HTTP 500 by their teardown path.
+        raise HTTPException(
+            status_code=409,
+            detail={"status": "iteration_limit", "iterations": iterations},
+        )
 
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"Workflow Error: {e}")
         traceback.print_exc()

@@ -41,6 +41,7 @@ make test-unit
 make build
 make up
 make test
+make test-container
 make attack
 make stop
 ```
@@ -48,6 +49,22 @@ make stop
 `make attack` runs the companion module in [`../../exploitation/agentic_bulk_delete`](../../exploitation/agentic_bulk_delete/README.md). `make replay` demonstrates the controls without a model or container.
 
 The API binds to `localhost:8011` by default; the MCP service is reachable only on the private Podman network. Override `HOST_PORT` if needed. Do not expose this deliberately vulnerable sandbox to untrusted networks.
+
+For another OpenAI-compatible local backend, run the full lifecycle in one
+invocation. Set the model identifier, the URL visible inside the agent
+container, and a host-visible readiness URL explicitly. Keep a separate result
+subdirectory for each run:
+
+```bash
+make attack \
+  MODEL=devstral-small-2 \
+  MODEL_BASE_URL=http://host.containers.internal:8080/v1 \
+  MODEL_READY_URL=http://localhost:8080/v1/models \
+  RESULTS_SUBDIR=devstral-small-2
+```
+
+`MODEL_BASE_URL` is used by the container; `MODEL_READY_URL` is probed from the
+host before the containers start. The default values target local Ollama.
 
 On a rootless Linux host without an active systemd user session, pass Podman's cgroup manager explicitly:
 
